@@ -1,7 +1,10 @@
 streamlit
 streamlit-mic-recorder
-gtts
 openai
+docx2txt
+PyPDF2
+
+
 
 
 
