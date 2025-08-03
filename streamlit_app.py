@@ -58,7 +58,7 @@ function stopRecording() {
 """, unsafe_allow_html=True)
 
 # Receive and save audio if submitted
-audio_data = st.experimental_get_query_params().get("audio_data")
+audio_data = params = st.query_params.get("audio_data")
 if audio_data:
     audio_base64 = audio_data[0].split(',')[1]
     audio_bytes = base64.b64decode(audio_base64)
@@ -67,3 +67,4 @@ if audio_data:
         f.write(audio_bytes)
     st.success(f"Audio recorded and saved as {filename}")
     st.audio(audio_bytes, format="audio/webm")
+
