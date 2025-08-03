@@ -1,3 +1,8 @@
+# Add this near the top of your file
+def transcribe_audio(audio_bytes):
+    # For now, just return a dummy text
+    return "This is a placeholder transcription. Real transcription logic will be added later."
+
 import streamlit as st
 from streamlit_mic_recorder import mic_recorder  # if using microphone
 # Other necessary imports here...
@@ -19,4 +24,5 @@ if audio:
         report = analyze_text(transcript)
         st.write("📊 AI Analysis Report:")
         st.markdown(report)
+
 
