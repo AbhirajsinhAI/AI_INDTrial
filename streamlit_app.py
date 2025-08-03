@@ -1,87 +1,88 @@
 import streamlit as st
-from streamlit_mic_recorder import mic_recorder
-import tempfile
+import openai
 import os
+from gtts import gTTS
+import tempfile
+from streamlit_mic_recorder import mic_recorder
 
-from openai import OpenAI
-client = OpenAI()
+# Load your API key securely
+openai.api_key = st.secrets["OPENAI_API_KEY"]
 
-# === UI ===
 st.set_page_config(page_title="Qnest AI Interviewer", layout="centered")
-st.title("🎙️ Qnest AI Interviewer")
-st.markdown("Answer the AI's questions verbally. This is a voice-based mock interview.")
+st.title("🎤 Qnest AI Interviewer")
 
-# === Define Questions ===
 questions = [
     "Tell me about yourself.",
-    "Why do you want to work with us?",
-    "Describe a challenging situation you faced and how you handled it.",
     "What are your strengths and weaknesses?",
-    "Where do you see yourself in five years?"
+    "Describe a challenge you've faced at work and how you handled it.",
+    "Where do you see yourself in five years?",
+    "Why should we hire you?"
 ]
 
-# === State to Keep Track of Progress ===
-if 'q_index' not in st.session_state:
-    st.session_state.q_index = 0
-if 'interview_done' not in st.session_state:
-    st.session_state.interview_done = False
-
-# === Ask Question via Text-to-Speech ===
+# Helper function to convert text to speech using gTTS
 def ask_question(index):
-    st.subheader(f"Question {index+1}:")
-    st.markdown(f"**{questions[index]}**")
+    question_text = questions[index]
+    st.subheader(f"Question {index + 1}")
+    st.markdown(f"**{question_text}**")
 
-# === Transcribe Audio ===
+    tts = gTTS(text=question_text)
+    temp_audio = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+    tts.save(temp_audio.name)
+
+    with open(temp_audio.name, "rb") as audio_file:
+        st.audio(audio_file.read(), format="audio/mp3")
+
+    return question_text
+
+# Transcription function
 def transcribe_audio(audio_bytes):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as tmp:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp:
         tmp.write(audio_bytes)
         tmp_path = tmp.name
 
     with open(tmp_path, "rb") as audio_file:
-        transcript = client.audio.transcriptions.create(
+        transcript = openai.audio.transcriptions.create(
             model="whisper-1",
             file=audio_file
         )
-    os.remove(tmp_path)
     return transcript.text
 
-# === Analyze Text ===
-def analyze_text(text):
-    prompt = f"""You are an AI Interview coach. Analyze the following answer and give feedback on tone, clarity, confidence, and content quality. Also mention if the answer is aligned with a strong candidate profile.
-
-Answer: {text}"""
-    response = client.chat.completions.create(
+# Feedback/Analysis using GPT
+def analyze_text(transcript):
+    prompt = f"""Analyze this interview response for clarity, confidence, and relevance to the job:
+    
+    "{transcript}"
+    
+    Give a summary and improvement suggestions."""
+    
+    response = openai.chat.completions.create(
         model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are a helpful and critical interview evaluator."},
-            {"role": "user", "content": prompt}
-        ]
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.7,
     )
     return response.choices[0].message.content
 
-# === Interview Logic ===
-if not st.session_state.interview_done:
-    current_question = st.session_state.q_index
-    ask_question(current_question)
+# Main loop
+if "question_index" not in st.session_state:
+    st.session_state.question_index = 0
 
-    audio = mic_recorder(
-        start_prompt="🎤 Start Recording", stop_prompt="⏹️ Stop", just_once=True, key=f"rec_{current_question}"
-    )
+if st.session_state.question_index < len(questions):
+    question_text = ask_question(st.session_state.question_index)
 
-    if audio:
-        st.success("Audio recorded. Transcribing...")
-        transcript = transcribe_audio(audio['bytes'])
-        st.markdown(f"**You said:** {transcript}")
-        st.write("Analyzing answer...")
-        feedback = analyze_text(transcript)
-        st.info(feedback)
+    audio = mic_recorder(start_prompt="🎙️ Start Recording", stop_prompt="⏹️ Stop", key="recorder")
 
-        st.session_state.q_index += 1
+    if audio and "bytes" in audio:
+        with st.spinner("Transcribing and analyzing..."):
+            transcript = transcribe_audio(audio["bytes"])
+            report = analyze_text(transcript)
 
-        if st.session_state.q_index >= len(questions):
-            st.session_state.interview_done = True
-            st.success("Interview complete! You can refresh to try again.")
+            st.success("📝 Transcript:")
+            st.write(transcript)
 
+            st.success("📊 Feedback:")
+            st.markdown(report)
+
+        if st.button("Next Question ➡️"):
+            st.session_state.question_index += 1
 else:
-    st.balloons()
-    st.success("All questions answered. Interview session is complete.")
+    st.success("✅ Interview Completed!")
