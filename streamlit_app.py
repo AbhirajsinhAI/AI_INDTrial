@@ -1,3 +1,13 @@
+# Dummy placeholder for analysis logic
+def analyze_text(transcript):
+    return {
+        "Skills Match": "Good",
+        "Tone Analysis": "Confident",
+        "Behavioral Fit": "High",
+        "Overall Score": "8.5/10"
+    }
+
+
 # Add this near the top of your file
 def transcribe_audio(audio_bytes):
     # For now, just return a dummy text
@@ -24,5 +34,6 @@ if audio:
         report = analyze_text(transcript)
         st.write("📊 AI Analysis Report:")
         st.markdown(report)
+
 
 
