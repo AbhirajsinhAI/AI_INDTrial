@@ -11,7 +11,7 @@ from google.cloud import texttospeech
 
 # Load secrets
 openai.api_key = st.secrets["openai_api_key"]
-creds_dict = json.loads(st.secrets["google_tts"].to_str())
+creds_dict = st.secrets["google_tts"]
 
 # Set up Google TTS credentials
 with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".json", encoding="utf-8") as temp_json:
@@ -149,3 +149,4 @@ if st.session_state.questions:
             st.markdown("### 🧾 Final Summary")
             for i, (q, s) in enumerate(zip(st.session_state.questions, st.session_state.summaries)):
                 st.markdown(f"**Q{i+1}: {q}**\n\n{s}")
+
