@@ -4,6 +4,11 @@ docx2txt
 PyPDF2
 python-docx
 openai>=1.1.0
+whisper
+ffmpeg-python
+google-cloud-texttospeech
+
+
 
 
 
