@@ -7,6 +7,8 @@ openai>=1.1.0
 whisper
 ffmpeg-python
 google-cloud-texttospeech
+pydub
+
 
 
 
