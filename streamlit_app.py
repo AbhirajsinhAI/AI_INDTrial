@@ -1,51 +1,39 @@
 import streamlit as st
-from openai import OpenAI
-from streamlit_mic_recorder import mic_recorder
-from docx import Document
-from io import BytesIO
-import base64
+import openai
 import tempfile
-from pydub import AudioSegment
 import os
 import json
+import docx2txt
 from google.cloud import texttospeech
+from streamlit_mic_recorder import mic_recorder
 
-# === INITIAL SETUP ===
-st.set_page_config(page_title="Qnest AI Interviewer", layout="centered")
+st.set_page_config(page_title="Qnest AI Interviewer", layout="wide")
 st.title("🧠 Qnest AI Interviewer")
-st.markdown("This system asks questions based on JD + resume, records your voice answers, transcribes them, and gives AI feedback.")
+st.markdown("This system asks questions with voice, records your voice answer, transcribes it, and gives AI feedback.")
 
-client = OpenAI(api_key=st.secrets["openai_api_key"])
+# ---- SETUP KEYS ----
+openai.api_key = st.secrets["openai_api_key"]
 
-# === GOOGLE TTS SETUP ===
+# ---- SPEECH FUNCTION ----
 def synthesize_speech(text):
-    with tempfile.NamedTemporaryFile(mode="w+b", delete=False, suffix=".json") as temp_json:
-        temp_json.write(json.dumps(st.secrets["google_tts"]).encode())
-        temp_json.flush()
-        os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_json.name
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as temp_json:
+        json.dump(st.secrets["google_tts"], temp_json)
+        temp_json_path = temp_json.name
 
-        client_tts = texttospeech.TextToSpeechClient()
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = temp_json_path
+    client = texttospeech.TextToSpeechClient()
 
-        synthesis_input = texttospeech.SynthesisInput(text=text)
-        voice = texttospeech.VoiceSelectionParams(language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL)
-        audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
+    input_text = texttospeech.SynthesisInput(text=text)
+    voice = texttospeech.VoiceSelectionParams(language_code="en-US", ssml_gender=texttospeech.SsmlVoiceGender.NEUTRAL)
+    audio_config = texttospeech.AudioConfig(audio_encoding=texttospeech.AudioEncoding.MP3)
 
-        response = client_tts.synthesize_speech(
-            input=synthesis_input, voice=voice, audio_config=audio_config
-        )
+    response = client.synthesize_speech(input=input_text, voice=voice, audio_config=audio_config)
+    return response.audio_content
 
-        return response.audio_content
-
-# === HELPERS ===
-def read_docx(file):
-    doc = Document(file)
-    return "\n".join([para.text for para in doc.paragraphs if para.text.strip() != ""])
-
+# ---- QUESTION GENERATION ----
 def generate_questions(jd_text, resume_text):
     prompt = f"""
-You are a professional interviewer.
-
-Given the following job description and candidate resume, generate 3 interview questions that assess job-relevant skills.
+You are an AI interviewer. Based on the job description and resume below, create 5 job interview questions.
 
 Job Description:
 {jd_text}
@@ -53,88 +41,98 @@ Job Description:
 Resume:
 {resume_text}
 
-Only return questions. Number them.
+Only list the questions. Do not answer them.
 """
-    response = client.chat.completions.create(
+    response = openai.chat.completions.create(
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
-    return response.choices[0].message.content
+    return response.choices[0].message.content.strip().split("\n")
 
-def analyze_text(answer):
-    prompt = f"""
-You are an AI interviewer.
-
-Here is the transcript of a candidate's answer. Summarize the key points and assess the communication quality and confidence.
-
-Transcript:
-{answer}
-
-Return a short summary and evaluation.
-"""
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[{"role": "user", "content": prompt}]
-    )
-    return response.choices[0].message.content
-
+# ---- AUDIO TRANSCRIPTION ----
 def transcribe_audio(audio_bytes):
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as f:
-        f.write(audio_bytes)
-        f.flush()
-        sound = AudioSegment.from_file(f.name, format="webm")
-        wav_path = f.name.replace(".webm", ".wav")
-        sound.export(wav_path, format="wav")
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as temp_audio:
+        temp_audio.write(audio_bytes)
+        temp_audio_path = temp_audio.name
 
-    audio_file = open(wav_path, "rb")
-    transcript = client.audio.transcriptions.create(
-        model="whisper-1",
-        file=audio_file
-    )
+    audio_file = open(temp_audio_path, "rb")
+    transcript = openai.audio.transcriptions.create(model="whisper-1", file=audio_file)
     return transcript.text
 
-# === FILE UPLOAD ===
-jd_file = st.file_uploader("Upload Job Description (DOCX)", type="docx")
-resume_file = st.file_uploader("Upload Resume (DOCX)", type="docx")
+# ---- AI FEEDBACK ----
+def analyze_text(text):
+    prompt = f"""
+You are a professional HR expert. Analyze the candidate's response below and give:
+1. A brief summary.
+2. Communication rating out of 10.
+3. Confidence level out of 10.
+4. Job Fitment score out of 10.
+5. Suggestions for improvement.
 
-if jd_file and resume_file:
-    jd_text = read_docx(jd_file)
-    resume_text = read_docx(resume_file)
+Response:
+{text}
+"""
+    response = openai.chat.completions.create(
+        model="gpt-4",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
-    if st.button("🎯 Generate Questions"):
-        with st.spinner("Generating questions..."):
-            questions = generate_questions(jd_text, resume_text)
-            st.session_state.questions = questions.split("\n")
-            st.session_state.q_index = 0
-            st.session_state.answers = []
-            st.success("Questions ready!")
+# ---- SESSION STATE ----
+if "questions" not in st.session_state:
+    st.session_state.questions = []
+    st.session_state.current_index = 0
+    st.session_state.answers = []
+    st.session_state.transcripts = []
+    st.session_state.reports = []
 
-# === INTERVIEW SESSION ===
-if "questions" in st.session_state:
-    current_q = st.session_state.questions[st.session_state.q_index]
+# ---- FILE UPLOAD ----
+st.sidebar.header("📄 Upload Files")
+jd_file = st.sidebar.file_uploader("Upload Job Description (.docx)", type=["docx"])
+resume_file = st.sidebar.file_uploader("Upload Candidate Resume (.docx)", type=["docx"])
 
-    st.markdown(f"**Q{st.session_state.q_index+1}: {current_q}**")
+if jd_file and resume_file and not st.session_state.questions:
+    jd_text = docx2txt.process(jd_file)
+    resume_text = docx2txt.process(resume_file)
+    with st.spinner("Generating interview questions..."):
+        st.session_state.questions = generate_questions(jd_text, resume_text)
+    st.success("Questions generated!")
 
-    # Speak question (TTS)
-    if st.button("🔊 Speak Question"):
-        audio_bytes = synthesize_speech(current_q)
-        b64 = base64.b64encode(audio_bytes).decode()
-        st.audio(f"data:audio/mp3;base64,{b64}", format="audio/mp3")
+# ---- INTERVIEW FLOW ----
+if st.session_state.questions:
+    idx = st.session_state.current_index
+    if idx < len(st.session_state.questions):
+        current_q = st.session_state.questions[idx]
+        st.subheader(f"Q{idx + 1}: {current_q}")
 
-    audio = mic_recorder(start_prompt="🎙️ Start Recording", stop_prompt="⏹️ Stop", just_once=True, key=f"rec{st.session_state.q_index}")
+        if st.button("🔊 Speak Question"):
+            audio_bytes = synthesize_speech(current_q)
+            st.audio(audio_bytes, format="audio/mp3")
 
-    if audio:
-        with st.spinner("Transcribing and analyzing your answer..."):
-            transcript = transcribe_audio(audio['bytes'])
-            feedback = analyze_text(transcript)
-            st.markdown("📝 **Your Answer (Transcript):**")
-            st.info(transcript)
-            st.markdown("📊 **AI Feedback:**")
-            st.success(feedback)
-            st.session_state.answers.append((transcript, feedback))
+        audio = mic_recorder(start_prompt="🎤 Start Recording", stop_prompt="⏹️ Stop", just_once=True, key=f"rec_{idx}")
 
-        # Move to next question
-        if st.session_state.q_index + 1 < len(st.session_state.questions):
-            st.session_state.q_index += 1
-        else:
-            st.success("✅ Interview complete!")
+        if audio and "bytes" in audio:
+            with st.spinner("Transcribing..."):
+                transcript = transcribe_audio(audio['bytes'])
+                st.session_state.transcripts.append(transcript)
+
+                st.subheader("📝 Transcript")
+                st.write(transcript)
+
+                report = analyze_text(transcript)
+                st.session_state.reports.append(report)
+
+                st.subheader("📊 AI Feedback")
+                st.markdown(report)
+
+                st.session_state.current_index += 1
+                st.rerun()
+    else:
+        st.success("✅ Interview completed!")
+        st.header("📋 Final Report")
+
+        for i, (q, a, r) in enumerate(zip(st.session_state.questions, st.session_state.transcripts, st.session_state.reports)):
+            st.markdown(f"**Q{i+1}:** {q}")
+            st.markdown(f"**Your Answer:** {a}")
+            st.markdown(f"**AI Feedback:** {r}")
+            st.markdown("---")
